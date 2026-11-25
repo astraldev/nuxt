@@ -20,7 +20,7 @@ import { renderPayloadJsonScript } from './payload'
 import { renderStreamedIslandTeleports } from './islands'
 import { rendererDiagnostics } from './diagnostics'
 import { warnNoScriptsClientReliance } from './no-scripts'
-import { extractCspNonce } from './csp-nonce'
+import { extractCspNonce, stampCspNonce } from './csp-nonce'
 import { appEvent } from './runtime'
 import type { RendererEvent } from './runtime'
 import type { NuxtRendererInstance } from './instance'
@@ -179,7 +179,7 @@ export async function renderStreamedResponse ({ instance, event, ssrContext, ren
   // nonce a security module stamped onto the rendered head scripts; if none is
   // present the attribute is omitted and behaviour is unchanged.
   const cspNonce = extractCspNonce(headTags)
-  const nonceAttr = cspNonce ? ` nonce="${cspNonce}"` : ''
+  let nonceAttr = cspNonce ? ` nonce="${cspNonce}"` : ''
   const headChunkScript = (chunk: string) => `<script${nonceAttr}>${chunk};document.currentScript.remove()</script>`
 
   // 6. Fire `render:html` with `streaming: true` on the shell. Changes to
@@ -205,6 +205,12 @@ export async function renderStreamedResponse ({ instance, event, ssrContext, ren
   if (renderHtmlResult instanceof Promise) { await renderHtmlResult }
   if (import.meta.dev) {
     await stampDevBadgeNonce(runtime, event, shellContext, devBadge, cspNonce)
+  }
+  // A module may stamp the nonce in `render:html` instead of on the head tags (nuxt-security
+  // does). Pick it up from the shell, so the inline tags streamed after it carry it too.
+  const streamNonce = cspNonce || extractCspNonce(joinTags([...shellContext.head, ...shellContext.bodyPrepend]))
+  if (streamNonce) {
+    nonceAttr = ` nonce="${streamNonce}"`
   }
   if (import.meta.dev && (shellContext.body.length || shellContext.bodyAppend.length)) {
     rendererDiagnostics.NUXT_E8001({ path: event.url.pathname })
@@ -340,6 +346,12 @@ export async function renderStreamedResponse ({ instance, event, ssrContext, ren
         const closeContext = { bodyAppend: normalizeChunks([streamBodyTags, bodyTags, closingHead.bodyTags]) }
         const closeResult = hooks.callHook('render:html:close', closeContext, { event: hookEvent })
         if (closeResult instanceof Promise) { await closeResult }
+        // `render:html` does not see the tags rendered after the shell (`bodyClose` head tags,
+        // the payload), so stamp them here; after the hook, so a module that stamps them
+        // itself does not get a second nonce.
+        if (streamNonce) {
+          closeContext.bodyAppend = closeContext.bodyAppend.map(chunk => stampCspNonce(chunk, streamNonce))
+        }
 
         const closingHtml = APP_ROOT_CLOSE_TAG
           // Styles for modules registered after the first chunk (deeply nested
@@ -417,7 +429,8 @@ export async function renderStreamedResponse ({ instance, event, ssrContext, ren
           }
           const streamBodyTags = renderStreamBodyTags(ssrContext.head)
           const tail = applyRenderOptions(ssrContext.head.render(), renderSSRHeadOptions)
-          controller.enqueue(encoder.encode(streamBodyTags + tail.bodyTags))
+          const tailTags = streamBodyTags + tail.bodyTags
+          controller.enqueue(encoder.encode(streamNonce ? stampCspNonce(tailTags, streamNonce) : tailTags))
         } catch (error) {
           rendererDiagnostics.NUXT_E8009({
             path: event.url.pathname,

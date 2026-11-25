@@ -275,6 +275,34 @@ test.describe('SSR Streaming', () => {
     }
   })
 
+  // the `csp-render-html` fixture plugin stamps `render-html-nonce` in `render:html` only, as nuxt-security does
+  test('a nonce stamped in render:html reaches every streamed inline tag, once', async ({ fetch }) => {
+    const html = await fetch('/nonce-render-html').then(r => r.text())
+
+    const scripts = [...html.matchAll(/<script\b[^>]*>/g)].map(m => m[0])
+    expect(scripts.length).toBeGreaterThan(0)
+    expect(scripts.filter(tag => !tag.includes('nonce="render-html-nonce"')), 'scripts without the nonce').toEqual([])
+    expect(scripts.filter(tag => (tag.match(/\snonce=/g) || []).length > 1), 'scripts with a duplicate nonce').toEqual([])
+    expect(html).toMatch(/<script nonce="render-html-nonce"[^>]*>window\.__unhead__\.push/)
+    expect(html).toMatch(/<script nonce="render-html-nonce" id="late-body-close"/)
+    expect(html).toMatch(/<script nonce="render-html-nonce" id="shell-body-close"/)
+  })
+
+  test('streamed inline scripts run under a strict CSP set in render:html', async ({ page, goto }) => {
+    const errors = collectErrors(page)
+    await page.addInitScript(() => {
+      (window as any).__cspViolations = []
+      document.addEventListener('securitypolicyviolation', e => (window as any).__cspViolations.push(`${e.violatedDirective}: ${e.sample || e.blockedURI}`))
+    })
+    await goto('/nonce-render-html')
+
+    await expect(page.getByTestId('content')).toHaveText('late-loaded')
+    await expect(page).toHaveTitle('Late Tags Title')
+    expect(await page.evaluate(() => [(globalThis as any).__lateBodyClose, (globalThis as any).__shellBodyClose])).toEqual([true, true])
+    expect(await page.evaluate(() => (window as any).__cspViolations)).toEqual([])
+    expect(errors).toEqual([])
+  })
+
   test('route-level CSS is streamed after the shell', async ({ fetch, isDev }) => {
     test.skip(isDev, 'dev serves SFC <style> as JS modules, not extracted CSS assets')
 
