@@ -1,4 +1,4 @@
-import { defineComponent, getCurrentInstance, inject, onUnmounted, provide, reactive } from 'vue'
+import { defineComponent, getCurrentInstance, inject, onUnmounted, provide, reactive, toRaw } from 'vue'
 import type { DefineSetupFnComponent, PropType, SlotsType, VNode, VNodeNormalizedChildren } from 'vue'
 import type {
   BodyAttributes,
@@ -76,7 +76,12 @@ function createHeadComponentCtx (): HeadComponentCtx {
   }
   const input = reactive({})
   const entry = useHead(input)
-  const ctx: HeadComponentCtx = { input, entry, update: () => entry.patch(input) }
+  // The components patch from their render functions. The streaming client head renders the DOM
+  // synchronously on `patch()`, which would read the shared input inside the running render and
+  // subscribe each component to the others' keys (`<Html>` writing `htmlAttrs` re-renders `<Body>`,
+  // which writes `bodyAttrs` and re-renders `<Html>`, without end). Patching with the raw object
+  // keeps that render untracked; each component still re-renders for its own props and slots.
+  const ctx: HeadComponentCtx = { input, entry, update: () => entry.patch(toRaw(input)) }
   provide(HeadComponentCtxSymbol, ctx)
   return ctx
 }
