@@ -3,8 +3,8 @@
     nested parent ready
     <!-- `FoucAsyncBlock` is only instantiated once this parent's async setup
          resolves — i.e. after the first stream chunk. Its module (and SFC
-         `<style>`) is therefore registered too late for the post-shell styles
-         chunk and is emitted in the closing HTML instead. -->
+         `<style>`) is registered too late for the post-shell styles chunk, so
+         it is sent ahead of the chunk that carries its DOM instead. -->
     <FoucAsyncBlock
       name="flashy"
       :delay="40"

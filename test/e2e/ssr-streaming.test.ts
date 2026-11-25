@@ -284,9 +284,8 @@ test.describe('SSR Streaming', () => {
   })
 
   // A nested async component is only instantiated once its async parent resolves, after the
-  // first chunk has streamed, so its SFC `<style>` lands in the closing HTML behind its own DOM.
-  // This is documented as a known limitation under SSR streaming in the experimental features guide.
-  test('async-component CSS streams behind its DOM (FOUC footgun)', async ({ fetch, isDev }) => {
+  // first chunk has streamed. Its SFC `<style>` must still reach the page ahead of its DOM.
+  test('async-component CSS streams ahead of its DOM', async ({ fetch, isDev }) => {
     test.skip(isDev, 'dev serves SFC <style> as JS modules, not extracted CSS assets')
 
     const html = await fetch('/fouc').then(r => r.text())
@@ -295,12 +294,13 @@ test.describe('SSR Streaming', () => {
     expect(domIdx, 'styled async component must render').toBeGreaterThan(-1)
     const styleIdx = html.search(/<style[^>]*>[^<]*\.fouc-marker/)
     expect(styleIdx, 'the .fouc-marker <style> must be streamed').toBeGreaterThan(-1)
-    expect(styleIdx, 'async-component CSS is streamed behind its DOM').toBeGreaterThan(domIdx)
+    expect(styleIdx, 'async-component CSS is streamed ahead of its DOM').toBeLessThan(domIdx)
   })
 
-  test('async-component CSS visibly flashes unstyled mid-stream', async ({ page, baseURL, isDev }) => {
+  test('async-component CSS applies before the component paints, and leaves the app root', async ({ page, baseURL, isDev }) => {
     test.skip(isDev, 'dev serves SFC <style> as JS modules, not extracted CSS assets')
 
+    const errors = collectErrors(page)
     await page.goto(new URL('/fouc', baseURL).href, { waitUntil: 'commit' })
 
     const target = page.locator('[data-testid="fouc-target"]')
@@ -314,8 +314,15 @@ test.describe('SSR Streaming', () => {
       await page.waitForTimeout(20)
     }
 
-    expect(sawUnstyled, 'the async component must paint before its streamed <style> arrives').toBe(true)
-    expect(sawStyled, 'the streamed <style> must eventually apply').toBe(true)
+    expect(sawUnstyled, 'the async component must not paint before its streamed <style> applies').toBe(false)
+    expect(sawStyled, 'the streamed <style> must apply').toBe(true)
+
+    await page.waitForLoadState('load')
+    await page.waitForFunction(() => window.useNuxtApp?.() && !window.useNuxtApp?.().isHydrating)
+    // moved out of the app root, so hydration sees only app markup
+    expect(await page.evaluate(() => document.querySelectorAll('#__nuxt style, #__nuxt link[rel="stylesheet"]').length)).toBe(0)
+    expect(await target.evaluate(el => getComputedStyle(el).backgroundColor)).toBe('rgb(0, 220, 130)')
+    expect(errors.filter(e => /hydrat/i.test(e))).toEqual([])
   })
 
   test('Teleport-to-body content is appended after the app root', async ({ fetch }) => {

@@ -5,9 +5,9 @@
     </h1>
 
     <!-- A *nested* async component. `FoucNestedParent` resolves first, and only
-         then renders the styled `FoucAsyncBlock`. Because that inner component
-         is instantiated after the first chunk, the renderer emits its SFC
-         `<style>` in the closing HTML — behind the component's own DOM. -->
+         then renders the styled `FoucAsyncBlock`. That inner component is
+         instantiated after the first chunk, so the renderer streams its SFC
+         `<style>` ahead of the chunk that carries its DOM. -->
     <Suspense>
       <FoucNestedParent :delay="100" />
       <template #fallback>
@@ -17,8 +17,8 @@
       </template>
     </Suspense>
 
-    <!-- A slow sibling holds the stream open, widening the window during which
-         `flashy` is painted but still unstyled. -->
+    <!-- A slow sibling holds the stream open, so a `<style>` deferred to the
+         closing HTML would leave `flashy` painted unstyled for a while. -->
     <Suspense>
       <AsyncBlock
         name="slow"

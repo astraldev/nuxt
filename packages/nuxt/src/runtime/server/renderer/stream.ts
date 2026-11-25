@@ -266,14 +266,14 @@ export async function renderStreamedResponse ({ instance, event, ssrContext, ren
   // entry styles and across calls.
   const emittedStyles = new Set<string>(Object.values(entryStyles).map(r => r.file))
   const inlinedCss = new Set<string>(entryInlineStyles.map(s => String(s.innerHTML)))
-  const renderRouteStyles = async (): Promise<string> => {
-    let tags = ''
+  const collectRouteStyles = async (): Promise<string[]> => {
+    const tags: string[] = []
     if (inlinesStyles(NO_SCRIPTS)) {
       for (const style of await renderInlineStyles(ssrContext.modules ?? [])) {
         const css = String(style.innerHTML)
         if (!css || inlinedCss.has(css)) { continue }
         inlinedCss.add(css)
-        tags += `<style${nonceAttr}>${css}</style>`
+        tags.push(`<style${nonceAttr}>${css}</style>`)
       }
       // a scriptless render inlines only its own modules; the rest still need links
       if (NUXT_INLINE_STYLES) { return tags }
@@ -281,9 +281,20 @@ export async function renderStreamedResponse ({ instance, event, ssrContext, ren
     for (const resource of Object.values(getRequestDependencies(ssrContext, rendererContext).styles)) {
       if (emittedStyles.has(resource.file) || isDevInlineStyle(resource.file)) { continue }
       emittedStyles.add(resource.file)
-      tags += `<link rel="stylesheet" crossorigin href="${rendererContext.buildAssetsURL(resource.file)}">`
+      tags.push(`<link rel="stylesheet" crossorigin href="${rendererContext.buildAssetsURL(resource.file)}">`)
     }
     return tags
+  }
+  const renderRouteStyles = async (): Promise<string> => (await collectRouteStyles()).join('')
+  // Styles for modules a mid-stream chunk introduced (async components that resolved after the
+  // first chunk). They go out ahead of that chunk so the markup never paints unstyled. They land
+  // inside the app root, so a script moves them into `<head>` before hydration walks the root;
+  // as an inline script it runs only once any stylesheet link before it has loaded. Without
+  // scripts nothing hydrates, so the tags stay where they are.
+  const renderChunkStyles = async (): Promise<string> => {
+    const tags = await collectRouteStyles()
+    if (!tags.length || NO_SCRIPTS) { return tags.join('') }
+    return tags.join('') + `<script${nonceAttr}>(function(s,n){var e=[],p=s;while(n--&&(p=p.previousElementSibling))e.unshift(p);document.head.append.apply(document.head,e);s.remove()})(document.currentScript,${tags.length})</script>`
   }
 
   const outputStream = new ReadableStream<Uint8Array>({
@@ -304,6 +315,10 @@ export async function renderStreamedResponse ({ instance, event, ssrContext, ren
           while (true) {
             const { done, value } = await reader.read()
             if (done) { break }
+            const chunkStyles = await renderChunkStyles()
+            if (chunkStyles) {
+              await enqueueChunk(controller, encoder.encode(chunkStyles))
+            }
             await enqueueChunk(controller, value)
             await enqueueHeadChunk(controller)
           }
@@ -342,8 +357,9 @@ export async function renderStreamedResponse ({ instance, event, ssrContext, ren
         if (closeResult instanceof Promise) { await closeResult }
 
         const closingHtml = APP_ROOT_CLOSE_TAG
-          // Styles for modules registered after the first chunk (deeply nested
-          // async components) - emitted outside the app root.
+          // Styles for modules registered by the last chunk without markup of
+          // their own (e.g. a component that renders nothing) - emitted outside
+          // the app root.
           + (await renderRouteStyles())
           + renderAppTeleports(ssrContext)
           // the buffered renderer places `<Teleport to="body">` content at

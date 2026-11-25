@@ -10,8 +10,8 @@
 <script setup lang="ts">
 // An async component whose SFC `<style>` only registers its module once the
 // component renders — i.e. after the shell has already flushed. The streaming
-// renderer therefore emits this CSS in the closing HTML, behind the component's
-// own DOM. See `/fouc` and the FOUC streaming tests.
+// renderer sends this CSS ahead of the chunk carrying the component's DOM.
+// See `/fouc` and the FOUC streaming tests.
 const { name, delay } = defineProps<{ name: string, delay: number }>()
 
 await new Promise(resolve => setTimeout(resolve, import.meta.server ? delay : 0))
